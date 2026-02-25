@@ -1,20 +1,23 @@
 PROGRAM linear_ode
+    ! Here we solve a linear ode on a discrete grid, and compare the accuracy of
+    ! two methods: Euler forward(1st order) and Heun(2nd order).
 
+    USE netcdf
     IMPLICIT NONE
+
     REAL(8) :: x0, x1, dx, y0
-    INTEGER :: nx, n, u, ios
-    REAL(8), ALLOCATABLE :: x(:), err_eu(:), err_he(:)
-    REAL(8) :: y_eu, y_he, y_sol
+    INTEGER :: nx, n, stats, lode, dim_x, var_euler, var_heun, var_x
+    REAL(8), ALLOCATABLE :: x(:), err_eul(:), err_heu(:)
+    REAL(8) :: yeul, yheu, yexc
 
     ! Parameters
     x0 = 0.0
     x1 = 10.0
     dx = 0.1
     y0 = 0.0
-
     nx = INT((x1 - x0)/dx) + 1
 
-    ALLOCATE(x(nx), err_eu(nx), err_he(nx))
+    ALLOCATE(x(nx), err_eul(nx), err_heu(nx))
 
     ! Build x grid
     DO n = 1, nx
@@ -22,36 +25,68 @@ PROGRAM linear_ode
     END DO
 
     ! Initial conditions
-    y_eu = y0
-    y_he = y0
-    y_sol = sol_func(x(1))
-    err_eu(1)  = y_eu - y_sol
-    err_he(1)  = y_he - y_sol
+    yeul = y0
+    yheu = y0
+    yexc = sol_func(x(1))
+
+    ! Errors
+    err_eul(1)  = yeul - yexc
+    err_heu(1)  = yheu - yexc
+
+    ! Create nc
+    stats = nf90_create("euler_heun.nc", NF90_CLOBBER, lode); CALL handle_err(stats)
+    stats = nf90_def_dim(lode, "x", nx, dim_x); CALL handle_err(stats)
+
+    ! variables
+    stats = nf90_def_var(lode, "x", NF90_DOUBLE, (/dim_x/), var_x); CALL handle_err(stats)
+    stats = nf90_def_var(lode, "euler_error", NF90_DOUBLE, (/dim_x/), var_euler); CALL handle_err(stats)
+    stats = nf90_def_var(lode, "heun_error", NF90_DOUBLE, (/dim_x/), var_heun); CALL handle_err(stats)
+
+    ! attributtes
+    stats = nf90_put_att(lode, var_x, "units", "m"); CALL handle_err(stats)
+    stats = nf90_put_att(lode, var_euler, "units", "m"); CALL handle_err(stats)
+    stats = nf90_put_att(lode, var_heun, "units", "m"); CALL handle_err(stats)
+    stats = nf90_put_att(lode, NF90_GLOBAL, "dx", dx); CALL handle_err(stats)
+
+    stats = nf90_enddef(lode); CALL handle_err(stats)
+
+    ! write nc
+    stats = nf90_put_var(lode, var_x, x); CALL handle_err(stats)
+    stats = nf90_put_var(lode, var_euler, err_eul); CALL handle_err(stats)
+    stats = nf90_put_var(lode, var_heun, err_heu); CALL handle_err(stats)
 
     ! Time step
     DO n = 2, nx
-        y_eu = euler_forward(x(n-1), y_eu, dx)
-        y_he = heun(x(n-1), y_he, dx)
-        y_sol = sol_func(x(n))
-        err_eu(n) = y_eu - y_sol
-        err_he(n) = y_he - y_sol
+        ! Use methods
+        yeul = euler_forward(x(n-1), yeul, dx)
+        yheu = heun(x(n-1), yheu, dx)
+
+        ! Calculate errors
+        yexc = sol_func(x(n))
+        err_eul(n) = yeul - yexc
+        err_heu(n) = yheu - yexc
+
+        ! Save variables in netcdf
+        stats = nf90_put_var(lode, var_euler, err_eul); CALL handle_err(stats)
+        stats = nf90_put_var(lode, var_heun, err_heu); CALL handle_err(stats)
+
     END DO
 
-    ! Save file
-    OPEN(NEWUNIT=u, IOSTAT=ios, FILE='euler_heun.txt', &
-      STATUS='new', ACTION='write')
-
-        IF (ios == 0) THEN
-            WRITE(u,'(A)') "# x  err_euler  err_heun"
-            DO n = 1, nx
-                WRITE(u,'(3F20.12)') x(n), err_eu(n), err_he(n)
-            END DO
-            CLOSE(u)
-        END IF
-
-    DEALLOCATE(x, err_eu, err_he)
+    ! Close and deallocate
+    stats = nf90_close(lode); CALL handle_err(stats)
+    DEALLOCATE(x, err_eul, err_heu)
 
 CONTAINS
+
+    SUBROUTINE handle_err(stats)
+
+        INTEGER, INTENT(IN) :: stats
+        IF(stats/=nf90_noerr) THEN
+            PRINT *, TRIM(nf90_strerror(stats))
+            STOP "Stopped"
+        END IF
+
+    END SUBROUTINE handle_err
 
     REAL(8) FUNCTION func(x, y) RESULT(f)
 
